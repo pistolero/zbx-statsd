@@ -104,7 +104,6 @@ class Server(object):
 
                 if count > 1:
                     thresh_index = count - int(((100.0 - self.pct_threshold) / 100) * count)
-                    print thresh_index
                     max_threshold = v[thresh_index - 1]
                     total = sum(v[:thresh_index-1])
                     mean = total / thresh_index

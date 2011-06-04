@@ -19,26 +19,28 @@ __all__ = ['Server']
 
 def _clean_key(k):
     return re.sub(
-        '[^a-zA-Z_\-0-9\.]',
+        '[^a-zA-Z_\-0-9\.;]',
         '',
         k.replace('/','-').replace(' ','_')
     )
 
 def _split_key(k):
-    return k.split('.', 1)
+    return k.split(';', 1)
 
-#TIMER_MSG = '''stats.timers.%(key)s.lower %(min)s %(ts)s
-#stats.timers.%(key)s.count %(count)s %(ts)s
-#stats.timers.%(key)s.mean %(mean)s %(ts)s
-#stats.timers.%(key)s.upper %(max)s %(ts)s
-#stats.timers.%(key)s.upper_%(pct_threshold)s %(max_threshold)s %(ts)s
-#'''
+def _recv_all(sock, count):
+    buf = ''
+    while len(buf)<count:
+        chunk = sock.recv(count-len(buf))
+        if not chunk:
+            return buf
+        buf += chunk
+    return buf
 
 class Server(object):
 
-    def __init__(self, pct_threshold=90, debug=False, zabbix_host='localhost', zabbix_port=10051):
+    def __init__(self, pct_threshold=90, debug=False, zabbix_host='localhost', zabbix_port=10051, flush_interval=10000):
         self.buf = 1024
-        self.flush_interval = 10000
+        self.flush_interval = flush_interval
         self.pct_threshold = pct_threshold
         self.zabbix_host = zabbix_host
         self.zabbix_port = zabbix_port
@@ -71,7 +73,7 @@ class Server(object):
         ts = int(time.time())
         stats = 0
         stat_string = ''
-        self.pct_threshold = 10
+#        self.pct_threshold = 10
         
         data = []
         
@@ -82,7 +84,7 @@ class Server(object):
             data.append({
                 "host": host,
                 "key": key,
-                "value": v,
+                "value": str(v),
                 "clock": ts
             })
 
@@ -98,17 +100,24 @@ class Server(object):
 
                 mean = min
                 max_threshold = max
+                median = min
 
                 if count > 1:
-                    thresh_index = int(((100.0 - self.pct_threshold) / 100) * count)
+                    thresh_index = count - int(((100.0 - self.pct_threshold) / 100) * count)
+                    print thresh_index
                     max_threshold = v[thresh_index - 1]
                     total = sum(v[:thresh_index-1])
                     mean = total / thresh_index
+                    
+                    if count%2 == 0:
+                        median = (v[count/2] + v[count/2-1])/2.0
+                    else:
+                        median = (v[count/2])
 
                 self.timers[k] = []
 
                 host, key = _split_key(k)
-                data.extens([{
+                data.extend([{
                     "host": host,
                     "key": key + '.mean',
                     "value": mean,
@@ -133,6 +142,11 @@ class Server(object):
                     "key": key + '.upper_%s' % self.pct_threshold,
                     "value": max_threshold,
                     "clock": ts
+                }, {
+                    "host": host,
+                    "key": key + '.median',
+                    "value": median,
+                    "clock": ts
                 }])
 
                 stats += 1
@@ -141,7 +155,6 @@ class Server(object):
 #                     
 #        })
 #        stat_string += 'statsd.numStats %s %d' % (stats, ts)
-
         self._send_metrics(data)
 
         self._set_timer()
@@ -150,16 +163,30 @@ class Server(object):
             print data
 
     def _send_metrics(self, metrics):
-        json = simplejson.dumps(metrics)
-        header = 'ZBXD\1' + struct.pack('<L', len(json))
-        packet = header + json
+        # Zabbix has very fragile Json parse, and we cannot use simplejson to dump whole packet
+        j = simplejson.dumps
+        metrics_data = []
+        for m in metrics:
+            metrics_data.append('\t\t{\n\t\t\t"host":%s,\n\t\t\t"key":%s,\n\t\t\t"value":%s,\n\t\t\t"clock":%s}' % (j(m['host']), j(m['key']), j(m['value']), j(m['clock'])))
+        json = '{\n\t"request":"sender data",\n\t"data":[\n%s]\n}' % (',\n'.join(metrics_data))
         
+        data_len = struct.pack('<Q', len(json))
+        packet = 'ZBXD\1' + data_len + json        
         try:
             zabbix = socket()
-            zabbix.connect((self.zabbix_host, self.zabbix_port))            
+            zabbix.connect((self.zabbix_host, self.zabbix_port))
             zabbix.sendall(packet)
-            resp = zabbix.recv()
-            print resp
+            resp_hdr = _recv_all(zabbix, 13)
+            if not resp_hdr.startswith('ZBXD\1') or len(resp_hdr) != 13:
+                logging.error('Wrong zabbix response')
+                return
+            resp_body_len = struct.unpack('<Q', resp_hdr[5:])[0]
+            resp_body = zabbix.recv(resp_body_len)
+            resp = simplejson.loads(resp_body)
+            logging.debug('Got response from Zabbix: %s' % resp)
+            logging.info(resp.get('info'))
+            if resp.get('response') != 'success':
+                logging.error('Got error from Zabbix: %s', resp)
             zabbix.close()
         except:
             logging.exception('Error while sending data to Zabbix')
@@ -168,18 +195,18 @@ class Server(object):
         self._timer = threading.Timer(self.flush_interval/1000, self.flush)
         self._timer.start()
 
-    def serve(self, hostname='', port=8125, graphite_host='localhost', graphite_port=2003):
+    def serve(self, hostname='', port=8126, zabbix_host='localhost', zabbix_port=2003):
         assert type(port) is types.IntType, 'port is not an integer: %s' % (port)
         addr = (hostname, port)
         self._sock = socket(AF_INET, SOCK_DGRAM)
         self._sock.bind(addr)
-        self.graphite_host = graphite_host
-        self.graphite_port = graphite_port
+        self.zabbix_host = zabbix_host
+        self.zabbix_port = zabbix_port
 
         import signal
         import sys
         def signal_handler(signal, frame):
-                self.stop()
+            self.stop()
         signal.signal(signal.SIGINT, signal_handler)
 
         self._set_timer()
@@ -195,13 +222,13 @@ class Server(object):
 class ServerDaemon(Daemon):
     def run(self, options):
         if setproctitle:
-            setproctitle('pystatsd')
-        server = Server(pct_threshold=options.pct, debug=options.debug)
+            setproctitle('zbx-statsd')
+        server = Server(pct_threshold=options.pct, debug=options.debug, flush_interval=options.flush_interval)
         server.serve(options.name, options.port, options.zabbix_host,
                      options.zabbix_port)
 
 
-if __name__ == '__main__':
+def main():
     import sys
     import argparse
     parser = argparse.ArgumentParser()
@@ -210,6 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--port', dest='port', help='port to run on', type=int, default=8126)
     parser.add_argument('--zabbix-port', dest='zabbix_port', help='port to connect to zabbix on', type=int, default=10051)
     parser.add_argument('--zabbix-host', dest='zabbix_host', help='host to connect to zabbix on', type=str, default='localhost')
+    parser.add_argument('-f', '--flush-interval', dest='flush_interval', help='interval between flushes', type=int, default=10000)
     parser.add_argument('-t', '--pct', dest='pct', help='stats pct threshold', type=int, default=90)
     parser.add_argument('-D', '--daemon', dest='daemonize', action='store_true', help='daemonize', default=False)
     parser.add_argument('--pidfile', dest='pidfile', action='store', help='pid file', default='/tmp/pystatsd.pid')
@@ -226,3 +254,6 @@ if __name__ == '__main__':
         daemon.stop()
     else:
         daemon.run(options)
+        
+if __name__ == '__main__':
+    main()

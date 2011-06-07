@@ -6,7 +6,7 @@ def read(fname):
 
 setup(
     name = "zbx-statsd",
-    version = "0.2.1",
+    version = "0.2.2",
     author = "Sergey Kirillov",
     author_email = "sergey.kirillov@gmail.com",
     description = ("Clone of Etsy's statsd and Steve Ivy's py-statsd designed to work with Zabbix (http://www.zabbix.com/)."),

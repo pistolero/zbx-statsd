@@ -103,9 +103,9 @@ class Server(object):
                 median = min
 
                 if count > 1:
-                    thresh_index = count - int(((100.0 - self.pct_threshold) / 100) * count)
+                    thresh_index = int(round(count*float(self.pct_threshold)/100))#count - int(round((100.0 - self.pct_threshold) / 100) * count)
                     max_threshold = v[thresh_index - 1]
-                    total = sum(v[:thresh_index-1])
+                    total = sum(v[:thresh_index])
                     mean = total / thresh_index
                     
                     if count%2 == 0:

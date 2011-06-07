@@ -115,7 +115,7 @@ class Server(object):
 
                 self.timers[k] = []
 
-                host, key = _split_key(k)
+                host, key = k.split(':', 1)
                 data.extend([{
                     "host": host,
                     "key": key + '[mean]',

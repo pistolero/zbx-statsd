@@ -22,15 +22,15 @@ class Client(object):
         self.host = host
         self.port = int(port)
         self.zabbix_hostname = zabbix_hostname or socket.gethostname()
-        self.log = logging.getLogger("pystatsd.client")
+        self.log = logging.getLogger("zbxstatsd.client")
         self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def timing(self, stat, time, sample_rate=1):
         """
         Log timing information for a single stat
-        >>> statsd_client.timing('some.time',500)
+        >>> statsd_client.timing('some.time',0.5)
         """
-        stats = {stat: "%d|ms" % time}
+        stats = {stat: "%d|ms" % (time*100)}
         self.send(stats, sample_rate)
 
     def increment(self, stats, sample_rate=1):
@@ -75,6 +75,6 @@ class Client(object):
             sampled_data=data
 
         try:
-            [self.udp_sock.sendto("%s;%s:%s" % (self.zabbix_hostname, stat, value), addr) for stat, value in sampled_data.iteritems()]
+            [self.udp_sock.sendto("%s:%s:%s" % (self.zabbix_hostname, stat, value), addr) for stat, value in sampled_data.iteritems()]
         except:
             self.log.exception("unexpected error")

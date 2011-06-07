@@ -19,13 +19,10 @@ __all__ = ['Server']
 
 def _clean_key(k):
     return re.sub(
-        '[^a-zA-Z_\-0-9\.;]',
+        '[^a-zA-Z_\-0-9\.]',
         '',
         k.replace('/','-').replace(' ','_')
     )
-
-def _split_key(k):
-    return k.split(';', 1)
 
 def _recv_all(sock, count):
     buf = ''
@@ -52,22 +49,24 @@ class Server(object):
 
 
     def process(self, data):
-        key, val = data.split(':')
+        host, key, val = data.split(':')
         key = _clean_key(key)
 
         sample_rate = 1;
         fields = val.split('|')
 
+        item_key = '%s:%s' % (host, key)
+        
         if (fields[1] == 'ms'):
-            if key not in self.timers:
-                self.timers[key] = []
-            self.timers[key].append(int(fields[0] or 0))
+            if item_key not in self.timers:
+                self.timers[item_key] = []
+            self.timers[item_key].append(int(fields[0] or 0))
         else:
             if len(fields) == 3:
                 sample_rate = float(re.match('^@([\d\.]+)', fields[2]).groups()[0])
-            if key not in self.counters:
-                self.counters[key] = 0;
-            self.counters[key] += int(fields[0] or 1) * (1 / sample_rate)
+            if item_key not in self.counters:
+                self.counters[item_key] = 0;
+            self.counters[item_key] += int(fields[0] or 1) * (1 / sample_rate)
 
     def flush(self):
         ts = int(time.time())
@@ -80,7 +79,8 @@ class Server(object):
         for k, v in self.counters.items():
             v = float(v) / (self.flush_interval / 1000)
             
-            host, key = _split_key(k)
+            host, key = k.split(':',1)
+            
             data.append({
                 "host": host,
                 "key": key,
@@ -118,32 +118,32 @@ class Server(object):
                 host, key = _split_key(k)
                 data.extend([{
                     "host": host,
-                    "key": key + '.mean',
+                    "key": key + '[mean]',
                     "value": mean,
                     "clock": ts
                 }, {
                     "host": host,
-                    "key": key + '.upper',
+                    "key": key + '[upper]',
                     "value": max,
                     "clock": ts
                 }, {
                     "host": host,
-                    "key": key + '.lower',
+                    "key": key + '[lower]',
                     "value": min,
                     "clock": ts                    
                 }, {
                     "host": host,
-                    "key": key + '.count',
+                    "key": key + '[count]',
                     "value": count,
                     "clock": ts
                 }, {
                     "host": host,
-                    "key": key + '.upper_%s' % self.pct_threshold,
+                    "key": key + '[upper_%s]' % self.pct_threshold,
                     "value": max_threshold,
                     "clock": ts
                 }, {
                     "host": host,
-                    "key": key + '.median',
+                    "key": key + '[median]',
                     "value": median,
                     "clock": ts
                 }])
@@ -166,8 +166,15 @@ class Server(object):
         j = simplejson.dumps
         metrics_data = []
         for m in metrics:
-            metrics_data.append('\t\t{\n\t\t\t"host":%s,\n\t\t\t"key":%s,\n\t\t\t"value":%s,\n\t\t\t"clock":%s}' % (j(m['host']), j(m['key']), j(m['value']), j(m['clock'])))
-        json = '{\n\t"request":"sender data",\n\t"data":[\n%s]\n}' % (',\n'.join(metrics_data))
+            metrics_data.append(('\t\t{\n'
+                                 '\t\t\t"host":%s,\n'
+                                 '\t\t\t"key":%s,\n'
+                                 '\t\t\t"value":%s,\n'
+                                 '\t\t\t"clock":%s}') % (j(m['host']), j(m['key']), j(m['value']), j(m['clock'])))
+        json = ('{\n'
+               '\t"request":"sender data",\n'
+               '\t"data":[\n%s]\n'
+               '}') % (',\n'.join(metrics_data))
         
         data_len = struct.pack('<Q', len(json))
         packet = 'ZBXD\1' + data_len + json        

@@ -49,7 +49,12 @@ class Server(object):
 
 
     def process(self, data):
-        host, key, val = data.split(':')
+        try:
+            host, key, val = data.split(':')
+        except ValueError:
+            logging.info('Got invalid data packet. Skipping')
+            logging.debug('Data packet dump: %r' % data)
+            return
         key = _clean_key(key)
 
         sample_rate = 1;

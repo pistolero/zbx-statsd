@@ -6,7 +6,7 @@ def read(fname):
 
 setup(
     name = "zbx-statsd",
-    version = "0.2.2",
+    version = "0.3.0",
     author = "Sergey Kirillov",
     author_email = "sergey.kirillov@gmail.com",
     description = ("Clone of Etsy's statsd and Steve Ivy's py-statsd designed to work with Zabbix (http://www.zabbix.com/)."),
@@ -14,7 +14,7 @@ setup(
     license = "BSD",
     packages=['zbxstatsd'],
     long_description=read('README.txt'),
-    install_requires=['argparse'],
+    install_requires=['argparse', 'zbxsend'],
     classifiers=[
         "License :: OSI Approved :: BSD License",
     ],

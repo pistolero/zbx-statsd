@@ -4,8 +4,8 @@ import threading
 import time
 import types
 import logging
-import simplejson
-import struct
+
+from zbxsend import Metric, send_to_zabbix 
 
 try:
     from setproctitle import setproctitle
@@ -23,15 +23,6 @@ def _clean_key(k):
         '',
         k.replace('/','-').replace(' ','_')
     )
-
-def _recv_all(sock, count):
-    buf = ''
-    while len(buf)<count:
-        chunk = sock.recv(count-len(buf))
-        if not chunk:
-            return buf
-        buf += chunk
-    return buf
 
 class Server(object):
 
@@ -79,19 +70,14 @@ class Server(object):
         stat_string = ''
 #        self.pct_threshold = 10
         
-        data = []
+        metrics = []
         
         for k, v in self.counters.items():
             v = float(v) / (self.flush_interval / 1000)
             
             host, key = k.split(':',1)
             
-            data.append({
-                "host": host,
-                "key": key,
-                "value": str(v),
-                "clock": ts
-            })
+            metrics.append(Metric(host, key, str(v), ts))
 
             self.counters[k] = 0
             stats += 1
@@ -121,86 +107,26 @@ class Server(object):
                 self.timers[k] = []
 
                 host, key = k.split(':', 1)
-                data.extend([{
-                    "host": host,
-                    "key": key + '[mean]',
-                    "value": mean,
-                    "clock": ts
-                }, {
-                    "host": host,
-                    "key": key + '[upper]',
-                    "value": max,
-                    "clock": ts
-                }, {
-                    "host": host,
-                    "key": key + '[lower]',
-                    "value": min,
-                    "clock": ts                    
-                }, {
-                    "host": host,
-                    "key": key + '[count]',
-                    "value": count,
-                    "clock": ts
-                }, {
-                    "host": host,
-                    "key": key + '[upper_%s]' % self.pct_threshold,
-                    "value": max_threshold,
-                    "clock": ts
-                }, {
-                    "host": host,
-                    "key": key + '[median]',
-                    "value": median,
-                    "clock": ts
-                }])
+                metrics.extend([
+                    Metric(host, key + '[mean]', mean, ts),
+                    Metric(host, key + '[upper]', max, ts),
+                    Metric(host, key + '[lower]', min, ts),
+                    Metric(host, key + '[count]', count, ts),
+                    Metric(host, key + '[upper_%s]' % self.pct_threshold, max_threshold, ts),
+                    Metric(host, key + '[median]', median, ts),
+                ])
 
                 stats += 1
 
-#        data.append({
-#                     
-#        })
 #        stat_string += 'statsd.numStats %s %d' % (stats, ts)
-        self._send_metrics(data)
+
+        send_to_zabbix(metrics, self.zabbix_host, self.zabbix_port)
 
         self._set_timer()
 
         if self.debug:
-            print data
+            print metrics
 
-    def _send_metrics(self, metrics):
-        # Zabbix has very fragile Json parse, and we cannot use simplejson to dump whole packet
-        j = simplejson.dumps
-        metrics_data = []
-        for m in metrics:
-            metrics_data.append(('\t\t{\n'
-                                 '\t\t\t"host":%s,\n'
-                                 '\t\t\t"key":%s,\n'
-                                 '\t\t\t"value":%s,\n'
-                                 '\t\t\t"clock":%s}') % (j(m['host']), j(m['key']), j(m['value']), j(m['clock'])))
-        json = ('{\n'
-               '\t"request":"sender data",\n'
-               '\t"data":[\n%s]\n'
-               '}') % (',\n'.join(metrics_data))
-        
-        data_len = struct.pack('<Q', len(json))
-        packet = 'ZBXD\1' + data_len + json        
-        try:
-            zabbix = socket()
-            zabbix.connect((self.zabbix_host, self.zabbix_port))
-            zabbix.sendall(packet)
-            resp_hdr = _recv_all(zabbix, 13)
-            if not resp_hdr.startswith('ZBXD\1') or len(resp_hdr) != 13:
-                logging.error('Wrong zabbix response')
-                return
-            resp_body_len = struct.unpack('<Q', resp_hdr[5:])[0]
-            resp_body = zabbix.recv(resp_body_len)
-            resp = simplejson.loads(resp_body)
-            logging.debug('Got response from Zabbix: %s' % resp)
-            logging.info(resp.get('info'))
-            if resp.get('response') != 'success':
-                logging.error('Got error from Zabbix: %s', resp)
-            zabbix.close()
-        except:
-            logging.exception('Error while sending data to Zabbix')
         
     def _set_timer(self):
         self._timer = threading.Timer(self.flush_interval/1000, self.flush)
@@ -233,7 +159,7 @@ class Server(object):
 class ServerDaemon(Daemon):
     def run(self, options):
         if setproctitle:
-            setproctitle('zbx-statsd')
+            setproctitle('zbxstatsd')
         server = Server(pct_threshold=options.pct, debug=options.debug, flush_interval=options.flush_interval)
         server.serve(options.name, options.port, options.zabbix_host,
                      options.zabbix_port)
@@ -248,6 +174,7 @@ def main():
     parser.add_argument('-p', '--port', dest='port', help='port to run on', type=int, default=8126)
     parser.add_argument('--zabbix-port', dest='zabbix_port', help='port to connect to zabbix on', type=int, default=10051)
     parser.add_argument('--zabbix-host', dest='zabbix_host', help='host to connect to zabbix on', type=str, default='localhost')
+    parser.add_argument('-l', dest='log_file', help='log file', type=str, default=None)
     parser.add_argument('-f', '--flush-interval', dest='flush_interval', help='interval between flushes', type=int, default=10000)
     parser.add_argument('-t', '--pct', dest='pct', help='stats pct threshold', type=int, default=90)
     parser.add_argument('-D', '--daemon', dest='daemonize', action='store_true', help='daemonize', default=False)
@@ -255,6 +182,9 @@ def main():
     parser.add_argument('--restart', dest='restart', action='store_true', help='restart a running daemon', default=False)
     parser.add_argument('--stop', dest='stop', action='store_true', help='stop a running daemon', default=False)
     options = parser.parse_args(sys.argv[1:])
+
+    logging.basicConfig(level=logging.DEBUG if options.debug else logging.WARN,
+                        stream=open(options.log_file) if options.log_file else sys.stderr)
 
     daemon = ServerDaemon(options.pidfile)
     if options.daemonize:

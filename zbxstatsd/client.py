@@ -30,7 +30,7 @@ class Client(object):
         Log timing information for a single stat
         >>> statsd_client.timing('some.time',0.5)
         """
-        stats = {stat: "%d|ms" % (time*100)}
+        stats = {stat: "%d|ms" % (time*1000)}
         self.send(stats, sample_rate)
 
     def increment(self, stats, sample_rate=1):

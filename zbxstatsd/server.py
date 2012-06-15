@@ -184,7 +184,7 @@ def main():
     options = parser.parse_args(sys.argv[1:])
 
     logging.basicConfig(level=logging.DEBUG if options.debug else logging.WARN,
-                        stream=open(options.log_file) if options.log_file else sys.stderr)
+                        stream=open(options.log_file, 'w') if options.log_file else sys.stderr)
 
     daemon = ServerDaemon(options.pidfile)
     if options.daemonize:
